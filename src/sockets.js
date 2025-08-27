@@ -279,6 +279,7 @@ function statsFromProgress(prog, startAt) {
  */
 export function attachSockets(httpServer, allowedOrigins) {
   const io = new Server(httpServer, {
+    path: '/socket.io',
     cors: {
       origin(origin, cb) {
         if (!origin) return cb(null, true); // outils sans Origin
@@ -289,7 +290,11 @@ export function attachSockets(httpServer, allowedOrigins) {
       },
       methods: ['GET', 'POST'],
       credentials: true
-    }
+    },
+    transports: ['polling', 'websocket'],
+    allowEIO3: false,                    
+    pingInterval: 25000,
+    pingTimeout: 20000,
   });
 
   /* --------- Surveillance globale de l'inactivité (tick 1s) --------- */
