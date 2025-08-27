@@ -21,7 +21,7 @@ app.set('trust proxy', 1);
 
 // CORS : mets l’URL EXACTE de ton front GitHub Pages
 // ex: https://matisvivier.github.io/Fast-Type
-const ORIGIN = process.env.CORS_ORIGIN || 'https://<username>.github.io/<repo>';
+const ORIGIN = process.env.CORS_ORIGIN || 'https://matis.vivier.github.io/Fast-Type';
 
 app.use(cors({ origin: ORIGIN, credentials: true }));
 app.use(express.json());
