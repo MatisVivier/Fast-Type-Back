@@ -2,7 +2,6 @@ import { Router } from 'express';
 import pool from '../db.js';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
-import { randomUUID } from 'crypto';
 
 const router = Router();
 
@@ -81,7 +80,7 @@ router.post('/auth/register', async (req, res) => {
       return res.status(400).json({ error: 'weak_password' });
     }
 
-    // Pré-checks (conservent un message d'erreur clair)
+    // Pré-checks pour des messages d’erreur clairs
     const [byEmail, byUsername] = await Promise.all([
       getUserByEmail(email),
       getUserByUsername(username),
@@ -89,15 +88,14 @@ router.post('/auth/register', async (req, res) => {
     if (byEmail)    return res.status(409).json({ error: 'email_taken' });
     if (byUsername) return res.status(409).json({ error: 'username_taken' });
 
-    const id = randomUUID();
     const hash = await bcrypt.hash(password, 12);
 
-    // INSERT + RETURNING (PostgreSQL)
+    // Laisse Postgres générer l'id (IDENTITY) et récupère via RETURNING
     const { rows } = await pool.query(
-      `INSERT INTO users (id, username, email, password_hash, rating, xp)
-       VALUES ($1, $2, $3, $4, 200, 0)
+      `INSERT INTO users (username, email, password_hash, rating, xp)
+       VALUES ($1, $2, $3, 200, 0)
        RETURNING id, username, email, rating, xp`,
-      [id, username, email, hash]
+      [username, email, hash]
     );
     const user = rows[0];
 
@@ -106,7 +104,6 @@ router.post('/auth/register', async (req, res) => {
   } catch (e) {
     // Violation d'unicité (si contraintes UNIQUE en base)
     if (e && e.code === '23505') {
-      // Essaye de déterminer quel champ est en conflit si possible
       const msg = (e.detail || '').toLowerCase();
       if (msg.includes('email')) return res.status(409).json({ error: 'email_taken' });
       if (msg.includes('username')) return res.status(409).json({ error: 'username_taken' });
