@@ -16,31 +16,34 @@ import { attachSockets } from './sockets.js';
 import pool, { startDbKeepAlive } from './db.js';
 
 const app = express();
+
+// Derrière un proxy (Render) pour que "secure" des cookies soit correct
 app.set('trust proxy', 1);
 
 // --- CORS (whitelist) ---
 const allowedOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
   : [
-      'https://matisvivier.github.io', // GitHub Pages (origin sans chemin)
-      'http://localhost:5173',         // dev vite
-      'http://localhost:3000'          // dev éventuel
+      'https://matisvivier.github.io', // Front GitHub Pages (origine sans chemin)
+      'http://localhost:5173',         // Dev Vite
+      // 'https://fast-type-back.onrender.com' // Inutile: c'est le back lui-même
     ];
 
 const corsOptions = {
   origin(origin, cb) {
-    // autorise les requêtes sans origin (curl, health checks)
+    // Autorise les requêtes sans header Origin (health checks, curl)
     if (!origin) return cb(null, true);
     if (allowedOrigins.includes(origin)) return cb(null, true);
     return cb(new Error(`Not allowed by CORS: ${origin}`));
   },
-  credentials: true,
+  credentials: true, // indispensable pour envoyer/recevoir les cookies
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
-  allowedHeaders: ['Content-Type','Authorization'],
+  allowedHeaders: ['Content-Type','Authorization','X-Requested-With'],
+  // Pas de exposedHeaders requis ici, on n’en lit pas côté client
 };
 
 app.use(cors(corsOptions));
-// pré-vols explicites (mêmes options)
+// Pré-vols explicites (OPTIONS)
 app.options('*', cors(corsOptions));
 
 app.use(express.json({ limit: '1mb' }));
@@ -64,7 +67,7 @@ app.use('/api', accountRoutes);
 // Health simple
 app.get('/api/healthz', (_req, res) => res.json({ ok: true, via: 'inline' }));
 
-// (debug) endpoint pour vérifier la DB (PostgreSQL)
+// (debug) endpoint DB (PostgreSQL)
 app.get('/api/debug/db', async (_req, res) => {
   try {
     const { rows } = await pool.query('SELECT COUNT(*)::int AS users FROM users');
@@ -75,10 +78,18 @@ app.get('/api/debug/db', async (_req, res) => {
   }
 });
 
+// --- Handler d'erreurs CORS propre (évite 500 bruts) ---
+app.use((err, _req, res, next) => {
+  if (err?.message?.startsWith('Not allowed by CORS')) {
+    return res.status(403).json({ ok: false, error: 'cors_blocked', detail: err.message });
+  }
+  return next(err);
+});
+
 // --- HTTP + Sockets ---
 const server = http.createServer(app);
 
-// Passe la même whitelist aux sockets
+// Passe la même whitelist aux sockets (Socket.IO gère ses propres CORS)
 attachSockets(server, allowedOrigins);
 
 // --- Lancement + vérif DB ---
