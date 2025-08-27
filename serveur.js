@@ -4,47 +4,58 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import http from 'http';
 
-// === tes routes ===
 import health from './routes/health.js';
 import texts from './routes/texts.js';
 import auth from './routes/auth.js';
 import soloRoutes from './routes/solo.js';
 import accountRoutes from './routes/account.js';
-
-// === sockets
 import { attachSockets } from './sockets.js';
 
 const app = express();
-
-// Render est derrière un proxy → nécessaire pour poser les cookies `secure:true`
 app.set('trust proxy', 1);
 
-// CORS : mets l’URL EXACTE de ton front GitHub Pages
-// ex: https://matisvivier.github.io/Fast-Type
-const ORIGIN = process.env.CORS_ORIGIN || 'https://matis.vivier.github.io/Fast-Type';
+// --- CORS ---
+const allowedOrigins = (process.env.CORS_ORIGINS?.split(',').map(s => s.trim()).filter(Boolean)) || [
+  'https://matisvivier.github.io',   // ← GitHub Pages (origin sans chemin)
+  'http://localhost:5173',           // ← dev vite
+  'http://localhost:3000'            // ← dev éventuel
+];
 
-app.use(cors({ origin: ORIGIN, credentials: true }));
+app.use(cors({
+  origin(origin, cb) {
+    // autorise les requêtes sans origin (curl, health checks)
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error(`Not allowed by CORS: ${origin}`));
+  },
+  credentials: true,
+  methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
+  allowedHeaders: ['Content-Type','Authorization']
+}));
+
+// pré-vols explicites (utile derrière proxy/CDN)
+app.options('*', cors());
+
 app.use(express.json());
 app.use(cookieParser());
 
-// --- Routes REST (comme avant) ---
+// --- Routes REST ---
 app.use('/api', health);
 app.use('/api', texts);
 app.use('/api', auth);
 app.use('/api', soloRoutes);
 app.use('/api', accountRoutes);
 
-// (optionnel) petit health inline si tu veux un doublon sûr
+// health doublon
 app.get('/api/healthz', (_req, res) => res.json({ ok: true, via: 'inline' }));
 
-// --- HTTP server + sockets (comme avant) ---
+// --- HTTP + Sockets ---
 const server = http.createServer(app);
 
-// branche tes sockets sur le même serveur HTTP
-attachSockets(server, ORIGIN);
+// Passe la même whitelist aux sockets
+attachSockets(server, allowedOrigins);
 
-// --- Lancement ---
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-  console.log(`✅ Server running on http://localhost:${PORT}`);
+  console.log(`✅ Server running on :${PORT}`);
 });

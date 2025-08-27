@@ -182,10 +182,10 @@ function finalizeAndEmit(io, matchId) {
   const totalElapsed = Math.max(p1Stats.elapsed || 0, p2Stats.elapsed || 0);
 
   // XP classé
-   const p1Win = decision.w === 1;
+  const p1Win = decision.w === 1;
   const p2Win = decision.w === 2;
   const p1Xp = gainRanked ? gainRanked(p1Stats, p1Win) : 0;
- const p2Xp = gainRanked ? gainRanked(p2Stats, p2Win) : 0;
+  const p2Xp = gainRanked ? gainRanked(p2Stats, p2Win) : 0;
 
   // Persist Elo + XP
   (async () => {
@@ -204,12 +204,12 @@ function finalizeAndEmit(io, matchId) {
            winner_id, reason, elapsed_ms)
          VALUES (?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?, ?,?, ?)`,
         [
-                    p1.id, p2.id, p1.username, p2.username,
+          p1.id, p2.id, p1.username, p2.username,
           p1Stats.wpm, p2Stats.wpm, p1Stats.acc, p2Stats.acc,
           p1.rating, p1New,
           p2.rating, p2New,
           p1Xp, p2Xp,
-         (decision.w === 1 ? p1.id : decision.w === 2 ? p2.id : null),
+          (decision.w === 1 ? p1.id : decision.w === 2 ? p2.id : null),
           decision.reason,
           totalElapsed
         ]
@@ -222,9 +222,8 @@ function finalizeAndEmit(io, matchId) {
   // mets aussi à jour Elo/XP en mémoire pour un prochain queue:join
   const s1 = io.sockets.sockets.get(m.p1Sid);
   const s2 = io.sockets.sockets.get(m.p2Sid);
-if (s1?.data?.user) { s1.data.user.rating = p1New; s1.data.user.xp = (s1.data.user.xp||0) + p1Xp; }
-if (s2?.data?.user) { s2.data.user.rating = p2New; s2.data.user.xp = (s2.data.user.xp||0) + p2Xp; }
-
+  if (s1?.data?.user) { s1.data.user.rating = p1New; s1.data.user.xp = (s1.data.user.xp || 0) + p1Xp; }
+  if (s2?.data?.user) { s2.data.user.rating = p2New; s2.data.user.xp = (s2.data.user.xp || 0) + p2Xp; }
 
   const payload = {
     ok: true,
@@ -266,8 +265,25 @@ function statsFromProgress(prog, startAt) {
 }
 
 /* ----------------------------- serveur IO ---------------------------- */
-export function attachSockets(httpServer, corsOrigin) {
-  const io = new Server(httpServer, { cors: { origin: corsOrigin, credentials: true } });
+/**
+ * @param {import('http').Server} httpServer
+ * @param {string[]} allowedOrigins - liste blanche des origins autorisés (ex: ['https://matisvivier.github.io','http://localhost:5173'])
+ */
+export function attachSockets(httpServer, allowedOrigins) {
+  const io = new Server(httpServer, {
+    cors: {
+      origin(origin, cb) {
+        // autorise les outils sans Origin (monitoring, curl)
+        if (!origin) return cb(null, true);
+        if (Array.isArray(allowedOrigins) && allowedOrigins.includes(origin)) {
+          return cb(null, true);
+        }
+        return cb(new Error(`Socket.IO CORS blocked: ${origin}`));
+      },
+      methods: ['GET', 'POST'],
+      credentials: true
+    }
+  });
 
   /* --------- Surveillance globale de l'inactivité (tick 1s) --------- */
   setInterval(() => {
@@ -299,6 +315,7 @@ export function attachSockets(httpServer, corsOrigin) {
   }, 1000);
 
   io.on('connection', async (socket) => {
+    // console.log('WS connected from origin:', socket.handshake.headers.origin);
     const user = await authFromSocket(socket);
     socket.data.user = user;
 
