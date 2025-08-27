@@ -32,7 +32,7 @@ function clearAuthCookie(res) {
 /* -------- Helpers SQL (PostgreSQL) -------- */
 async function getUserById(id) {
   const { rows } = await pool.query(
-    `SELECT id, email, username, rating, xp, password_hash
+    `SELECT id, email, username, rating, xp, coin_balance, password_hash
      FROM users
      WHERE id = $1
      LIMIT 1`,
@@ -43,7 +43,7 @@ async function getUserById(id) {
 
 async function getUserByEmail(email) {
   const { rows } = await pool.query(
-    `SELECT id, email, username, rating, xp, password_hash
+    `SELECT id, email, username, rating, xp, coin_balance, password_hash
      FROM users
      WHERE email = $1
      LIMIT 1`,
@@ -54,7 +54,7 @@ async function getUserByEmail(email) {
 
 async function getUserByUsername(username) {
   const { rows } = await pool.query(
-    `SELECT id, email, username, rating, xp, password_hash
+    `SELECT id, email, username, rating, xp, coin_balance, password_hash
      FROM users
      WHERE username = $1
      LIMIT 1`,

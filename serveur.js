@@ -11,6 +11,7 @@ import auth from './routes/auth.js';
 import soloRoutes from './routes/solo.js';
 import accountRoutes from './routes/account.js';
 import { attachSockets } from './sockets.js';
+import walletRoutes from './routes/wallet.js';
 
 // DB pool + keepalive (PostgreSQL)
 import pool, { startDbKeepAlive } from './db.js';
@@ -63,6 +64,8 @@ app.use('/api', texts);
 app.use('/api', auth);
 app.use('/api', soloRoutes);
 app.use('/api', accountRoutes);
+
+app.use('/api', walletRoutes);
 
 // Health simple
 app.get('/api/healthz', (_req, res) => res.json({ ok: true, via: 'inline' }));

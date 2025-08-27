@@ -5,6 +5,7 @@ import jwt from 'jsonwebtoken';
 import pool from './db.js';
 import { generateMatchText, seededRng } from './textGen.js';
 import { gainRanked } from './xp.js';
+import { levelFromXp, coinsEarnedBetweenLevels } from './services/progression.js';
 
 const COOKIE_NAME = process.env.COOKIE_NAME || 'ta_session';
 const JWT_SECRET  = process.env.JWT_SECRET  || 'dev_secret';
@@ -41,7 +42,7 @@ async function authFromSocket(socket) {
     const decoded = jwt.verify(token, JWT_SECRET);
 
     const { rows } = await pool.query(
-      `SELECT id, email, username, rating, xp
+      `SELECT id, email, username, rating, xp, coin_balance
        FROM users
        WHERE id = $1
        LIMIT 1`,
