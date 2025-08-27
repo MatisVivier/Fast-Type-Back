@@ -280,19 +280,26 @@ function statsFromProgress(prog, startAt) {
 export function attachSockets(httpServer, allowedOrigins) {
   const io = new Server(httpServer, {
     path: '/socket.io',
-    cors: {
-      origin(origin, cb) {
-        if (!origin) return cb(null, true); // outils sans Origin
-        if (Array.isArray(allowedOrigins) && allowedOrigins.includes(origin)) {
-          return cb(null, true);
-        }
-        return cb(new Error(`Socket.IO CORS blocked: ${origin}`));
-      },
-      methods: ['GET', 'POST'],
-      credentials: true
-    },
     transports: ['polling', 'websocket'],
-    allowEIO3: false,                    
+    // CORS explicite (pas de callback ici → engine.io met les bons headers)
+    cors: {
+      origin: allowedOrigins,                    // ex: ['https://matisvivier.github.io','http://localhost:5173']
+      credentials: true,
+      methods: ['GET', 'POST', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization'],
+    },
+    // OPTIONS pour /socket.io → forcer les headers CORS attendus par le browser
+    handlePreflightRequest: (req, res) => {
+      const headers = {
+        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+        'Access-Control-Allow-Origin': req.headers.origin || '*',
+        'Access-Control-Allow-Credentials': 'true',
+        'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
+        'Vary': 'Origin',
+      };
+      res.writeHead(200, headers);
+      res.end();
+    },
     pingInterval: 25000,
     pingTimeout: 20000,
   });
