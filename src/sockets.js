@@ -5,7 +5,7 @@ import jwt from 'jsonwebtoken';
 import pool from './db.js';
 import { generateMatchText, seededRng } from './textGen.js';
 import { gainRanked } from './xp.js';
-import { levelFromXp, coinsEarnedBetweenLevels } from './services/progression.js';
+import { levelFromXp, coinsEarnedBetweenLevels } from '../services/progression.js';
 
 const COOKIE_NAME = process.env.COOKIE_NAME || 'ta_session';
 const JWT_SECRET  = process.env.JWT_SECRET  || 'dev_secret';
