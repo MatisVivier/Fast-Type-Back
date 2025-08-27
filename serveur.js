@@ -1,55 +1,50 @@
 import 'dotenv/config';
-import http from 'http';
 import express from 'express';
-import cookieParser from 'cookie-parser';
 import cors from 'cors';
-import { Server as IOServer } from 'socket.io';
+import cookieParser from 'cookie-parser';
+import http from 'http';
 
-// routes
-import authRouter from './src/routes/auth.js';   // ton fichier existant
-// import otherRouters...
+// === tes routes ===
+import health from './routes/health.js';
+import texts from './routes/texts.js';
+import auth from './routes/auth.js';
+import soloRoutes from './routes/solo.js';
+import accountRoutes from './routes/account.js';
+
+// === sockets
+import { attachSockets } from './sockets.js';
 
 const app = express();
 
-// ——— PROD: derrière un proxy (Render) -> cookies/secure ok
+// Render est derrière un proxy → nécessaire pour poser les cookies `secure:true`
 app.set('trust proxy', 1);
 
-// ——— CORS : mets l’URL EXACTE de ton front (GitHub Pages)
-const ORIGIN = process.env.CORS_ORIGIN || 'https://<username>.github.io/<repo>'; // ← remplace
+// CORS : mets l’URL EXACTE de ton front GitHub Pages
+// ex: https://matisvivier.github.io/Fast-Type
+const ORIGIN = process.env.CORS_ORIGIN || 'https://<username>.github.io/<repo>';
 
-app.use(cors({
-  origin: ORIGIN,
-  credentials: true,
-}));
-
-app.use(cookieParser());
+app.use(cors({ origin: ORIGIN, credentials: true }));
 app.use(express.json());
+app.use(cookieParser());
 
-// ——— API
-app.use('/api', authRouter);
-// app.use('/api/xxx', xxxRouter);
+// --- Routes REST (comme avant) ---
+app.use('/api', health);
+app.use('/api', texts);
+app.use('/api', auth);
+app.use('/api', soloRoutes);
+app.use('/api', accountRoutes);
 
-// ——— Healthcheck (pour Render)
-app.get('/api/health', (req, res) => res.json({ ok: true }));
+// (optionnel) petit health inline si tu veux un doublon sûr
+app.get('/api/healthz', (_req, res) => res.json({ ok: true, via: 'inline' }));
 
-// ——— HTTP server + Socket.IO sur le même port
+// --- HTTP server + sockets (comme avant) ---
 const server = http.createServer(app);
 
-const io = new IOServer(server, {
-  cors: {
-    origin: ORIGIN,
-    credentials: true,
-  },
-});
+// branche tes sockets sur le même serveur HTTP
+attachSockets(server, ORIGIN);
 
-io.on('connection', (socket) => {
-  // tes listeners existants
-  // socket.on('queue:join', ...)
-  // socket.on('match:progress', ...)
-});
-
-// ——— Lancement
+// --- Lancement ---
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, () => {
-  console.log('Server listening on', PORT);
+  console.log(`✅ Server running on http://localhost:${PORT}`);
 });
