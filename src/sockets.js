@@ -39,8 +39,12 @@ async function authFromSocket(socket) {
     const token = cookies[COOKIE_NAME];
     if (!token) return null;
     const decoded = jwt.verify(token, JWT_SECRET);
-    const [rows] = await pool.query(
-      'SELECT id, email, username, rating, xp FROM users WHERE id = ? LIMIT 1',
+
+    const { rows } = await pool.query(
+      `SELECT id, email, username, rating, xp
+       FROM users
+       WHERE id = $1
+       LIMIT 1`,
       [decoded.sub]
     );
     const u = rows[0] || null;
@@ -59,7 +63,7 @@ function wordCountForLimit(limitSec) {
 async function pickRandomTextForMatch(limitSec = FIXED_LIMIT) {
   const seed  = (Date.now() & 0xffffffff) >>> 0;
   const rng   = seededRng(seed);
-  void rng; // (utilisable si tu veux diversifier)
+  void rng;
   const count = wordCountForLimit(limitSec);
   return generateMatchText(seed, count); // { id, content }
 }
@@ -73,16 +77,13 @@ function isForfeit(s) {
   return typeof s?.finishedBy === 'string' && s.finishedBy.startsWith('forfeit');
 }
 function decideWinner(s1, s2) {
-  // priorité: forfaits
   if (isForfeit(s1) && !isForfeit(s2)) return { w: 2, reason: 'Forfait' };
   if (!isForfeit(s1) && isForfeit(s2)) return { w: 1, reason: 'Forfait' };
   if (isForfeit(s1) && isForfeit(s2))   return { w: 0, reason: 'Double forfait' };
 
-  // sinon logique habituelle
   const f1 = s1.finishedBy === 'text';
   const f2 = s2.finishedBy === 'text';
 
-  // Quelqu’un a fini le texte (mode "text")
   if (f1 && !f2) return { w: 1, reason: 'A terminé le texte en premier' };
   if (!f1 && f2) return { w: 2, reason: 'A terminé le texte en premier' };
 
@@ -96,7 +97,6 @@ function decideWinner(s1, s2) {
     return { w: 0, reason: 'Égalité' };
   }
 
-  // Mode temps (personne n’a fini le texte) : précision > WPM
   if (s1.acc !== s2.acc)
     return { w: s1.acc > s2.acc ? 1 : 2, reason: 'Plus grande précision' };
   if (s1.wpm !== s2.wpm)
@@ -113,7 +113,6 @@ async function tryMatch(io) {
     // priorité Elo ±100
     let idx = queue.findIndex(p => Math.abs(p.rating - p1.rating) <= 100);
     if (idx < 0) {
-      // sinon: adversaire au plus proche Elo
       let best = -1, bestDiff = Infinity;
       for (let i = 0; i < queue.length; i++) {
         const d = Math.abs(queue[i].rating - p1.rating);
@@ -143,7 +142,6 @@ async function tryMatch(io) {
       startAt,
       text,
       limitSec,
-      // inactivité: on part du moment du départ
       p1LastAct: startAt,
       p2LastAct: startAt
     });
@@ -181,28 +179,41 @@ function finalizeAndEmit(io, matchId) {
   const delta = Math.abs(p1New - p1.rating);
   const totalElapsed = Math.max(p1Stats.elapsed || 0, p2Stats.elapsed || 0);
 
-  // XP classé
   const p1Win = decision.w === 1;
   const p2Win = decision.w === 2;
   const p1Xp = gainRanked ? gainRanked(p1Stats, p1Win) : 0;
   const p2Xp = gainRanked ? gainRanked(p2Stats, p2Win) : 0;
 
-  // Persist Elo + XP
   (async () => {
     try {
-      await pool.query('UPDATE users SET rating = ?, xp = xp + ? WHERE id = ?', [p1New, p1Xp, p1.id]);
-      await pool.query('UPDATE users SET rating = ?, xp = xp + ? WHERE id = ?', [p2New, p2Xp, p2.id]);
-
-      // Insère l’historique
+      // Updates Postgres
       await pool.query(
-        `INSERT INTO matches
-         (p1_id, p2_id, p1_username, p2_username,
+        'UPDATE users SET rating = $1, xp = xp + $2 WHERE id = $3',
+        [p1New, p1Xp, p1.id]
+      );
+      await pool.query(
+        'UPDATE users SET rating = $1, xp = xp + $2 WHERE id = $3',
+        [p2New, p2Xp, p2.id]
+      );
+
+      // Historique du match (Postgres)
+      await pool.query(
+        `INSERT INTO matches (
+           p1_id, p2_id, p1_username, p2_username,
            p1_wpm, p2_wpm, p1_acc, p2_acc,
            p1_rating_before, p1_rating_after,
            p2_rating_before, p2_rating_after,
            p1_xp, p2_xp,
-           winner_id, reason, elapsed_ms)
-         VALUES (?,?,?,?, ?,?,?,?, ?,?,?,?, ?,?, ?,?, ?)`,
+           winner_id, reason, elapsed_ms
+         )
+         VALUES (
+           $1, $2, $3, $4,
+           $5, $6, $7, $8,
+           $9, $10,
+           $11, $12,
+           $13, $14,
+           $15, $16, $17
+         )`,
         [
           p1.id, p2.id, p1.username, p2.username,
           p1Stats.wpm, p2Stats.wpm, p1Stats.acc, p2Stats.acc,
@@ -219,7 +230,6 @@ function finalizeAndEmit(io, matchId) {
     }
   })();
 
-  // mets aussi à jour Elo/XP en mémoire pour un prochain queue:join
   const s1 = io.sockets.sockets.get(m.p1Sid);
   const s2 = io.sockets.sockets.get(m.p2Sid);
   if (s1?.data?.user) { s1.data.user.rating = p1New; s1.data.user.xp = (s1.data.user.xp || 0) + p1Xp; }
@@ -239,7 +249,6 @@ function finalizeAndEmit(io, matchId) {
 
   io.to(matchId).emit('match:result', payload);
 
-  // cleanup
   s1?.leave(matchId);
   s2?.leave(matchId);
   inMatch.delete(m.p1Sid);
@@ -249,14 +258,13 @@ function finalizeAndEmit(io, matchId) {
 
 /* --------- Helpers: stats depuis un progrès (victoire par forfait) -------- */
 function statsFromProgress(prog, startAt) {
-  // prog: { pos, errors, t } ; t = elapsed côté client
   if (!prog) {
     const elapsed = Math.max(0, Date.now() - (startAt || Date.now()));
     return { wpm: 0, acc: 1, typed: 0, correct: 0, errors: 0, elapsed, finishedBy: 'win_by_forfeit' };
   }
   const correct = Math.max(0, prog.pos || 0);
   const errors  = Math.max(0, prog.errors || 0);
-  const typed   = Math.max(1, correct + errors); // approximation raisonnable
+  const typed   = Math.max(1, correct + errors);
   const elapsed = Math.max(1, prog.t || (Date.now() - (startAt || Date.now())));
   const minutes = elapsed / 60000;
   const wpm     = Math.round((correct / 5) / Math.max(0.001, minutes));
@@ -267,14 +275,13 @@ function statsFromProgress(prog, startAt) {
 /* ----------------------------- serveur IO ---------------------------- */
 /**
  * @param {import('http').Server} httpServer
- * @param {string[]} allowedOrigins - liste blanche des origins autorisés (ex: ['https://matisvivier.github.io','http://localhost:5173'])
+ * @param {string[]} allowedOrigins - liste blanche des origins autorisés
  */
 export function attachSockets(httpServer, allowedOrigins) {
   const io = new Server(httpServer, {
     cors: {
       origin(origin, cb) {
-        // autorise les outils sans Origin (monitoring, curl)
-        if (!origin) return cb(null, true);
+        if (!origin) return cb(null, true); // outils sans Origin
         if (Array.isArray(allowedOrigins) && allowedOrigins.includes(origin)) {
           return cb(null, true);
         }
@@ -290,21 +297,14 @@ export function attachSockets(httpServer, allowedOrigins) {
     const now = Date.now();
     for (const [matchId, m] of active.entries()) {
       if (!m) continue;
-      if (now < m.startAt) continue; // pas avant le départ
+      if (now < m.startAt) continue;
 
-      // P1 inactif ?
       if (!m.p1Stats && now - (m.p1LastAct || m.startAt) >= INACT_MS) {
-        // forfait P1
         m.p1Stats = { wpm: 0, acc: 0, typed: 0, correct: 0, errors: 0, elapsed: now - m.startAt, finishedBy: 'forfeit_inactive' };
-        // gagne côté P2 (si pas déjà fini)
         if (!m.p2Stats) m.p2Stats = statsFromProgress(m.p2Prog, m.startAt);
       }
-
-      // P2 inactif ?
       if (!m.p2Stats && now - (m.p2LastAct || m.startAt) >= INACT_MS) {
-        // forfait P2
         m.p2Stats = { wpm: 0, acc: 0, typed: 0, correct: 0, errors: 0, elapsed: now - m.startAt, finishedBy: 'forfeit_inactive' };
-        // gagne côté P1 (si pas déjà fini)
         if (!m.p1Stats) m.p1Stats = statsFromProgress(m.p1Prog, m.startAt);
       }
 
@@ -336,7 +336,6 @@ export function attachSockets(httpServer, allowedOrigins) {
       const m = active.get(matchId);
       if (!m) return;
 
-      // Sauvegarde dernière activité & dernier progrès
       if (socket.id === m.p1Sid) {
         m.p1LastAct = Date.now();
         m.p1Prog = { pos, errors, t };
@@ -361,11 +360,9 @@ export function attachSockets(httpServer, allowedOrigins) {
     });
 
     socket.on('disconnect', () => {
-      // retire de la file d'attente
       const qIdx = queue.findIndex(q => q.socketId === socket.id);
       if (qIdx >= 0) queue.splice(qIdx, 1);
 
-      // si en match: forfait pour déconnexion
       const matchId = inMatch.get(socket.id);
       if (matchId) {
         const m = active.get(matchId);
@@ -386,11 +383,11 @@ export function attachSockets(httpServer, allowedOrigins) {
   });
 
   io.engine.on('connection', (raw) => {
-  console.log('[ENG] transport=', raw.transport.name);
-  raw.on('upgrade', () => {
-    console.log('[ENG] upgraded to', raw.transport.name);
+    console.log('[ENG] transport=', raw.transport.name);
+    raw.on('upgrade', () => {
+      console.log('[ENG] upgraded to', raw.transport.name);
+    });
   });
-});
 
   return io;
 }

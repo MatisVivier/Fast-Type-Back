@@ -1,3 +1,4 @@
+// server.js
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
@@ -11,7 +12,7 @@ import soloRoutes from './routes/solo.js';
 import accountRoutes from './routes/account.js';
 import { attachSockets } from './sockets.js';
 
-// DB pool + keepalive
+// DB pool + keepalive (PostgreSQL)
 import pool, { startDbKeepAlive } from './db.js';
 
 const app = express();
@@ -63,11 +64,11 @@ app.use('/api', accountRoutes);
 // Health simple
 app.get('/api/healthz', (_req, res) => res.json({ ok: true, via: 'inline' }));
 
-// (debug) petit endpoint pour vérifier la DB depuis le front
+// (debug) endpoint pour vérifier la DB (PostgreSQL)
 app.get('/api/debug/db', async (_req, res) => {
   try {
-    const [r] = await pool.query('SELECT COUNT(*) AS users FROM users');
-    res.json({ ok: true, users: r[0]?.users ?? 0 });
+    const { rows } = await pool.query('SELECT COUNT(*)::int AS users FROM users');
+    res.json({ ok: true, users: rows?.[0]?.users ?? 0 });
   } catch (e) {
     console.error('DB debug error:', e.code || e.message);
     res.status(503).json({ ok: false, error: e.code || 'db_error' });
@@ -88,10 +89,10 @@ server.listen(PORT, async () => {
   // Keepalive DB pour éviter le sleep des connexions
   startDbKeepAlive();
 
-  // Check DB au boot
+  // Check DB au boot (PostgreSQL)
   try {
-    const [r] = await pool.query('SELECT 1 AS ok');
-    console.log('✅ DB OK', r[0]);
+    const { rows } = await pool.query('SELECT 1 AS ok');
+    console.log('✅ DB OK', rows[0]);
   } catch (e) {
     console.error('❌ DB KO', e);
   }

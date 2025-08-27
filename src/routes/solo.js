@@ -16,21 +16,36 @@ router.post('/solo/finish', async (req, res) => {
     const userId = decoded.sub;
 
     const stats = req.body?.stats ? req.body.stats : req.body;
-    const { wpm=0, acc=1, typed=0, correct=0, errors=0, elapsed=0 } = stats || {};
+    let { wpm = 0, acc = 1, typed = 0, correct = 0, errors = 0, elapsed = 0 } = stats || {};
 
-    // Insert la run
+    // Normalisation / bornes simples
+    wpm     = Math.max(0, Math.round(Number(wpm)));
+    typed   = Math.max(0, Math.round(Number(typed)));
+    correct = Math.max(0, Math.round(Number(correct)));
+    errors  = Math.max(0, Math.round(Number(errors)));
+    elapsed = Math.max(0, Math.round(Number(elapsed)));
+    acc     = Math.max(0, Math.min(1, Number(acc))); // 0..1
+
+    // Insert la run (PostgreSQL)
     await pool.query(
       `INSERT INTO solo_runs (user_id, wpm, acc, typed, correct, errors, elapsed_ms)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [userId, Math.round(wpm), Number(acc), Math.round(typed), Math.round(correct), Math.round(errors), Math.round(elapsed)]
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [userId, wpm, acc, typed, correct, errors, elapsed]
     );
 
-    // XP
-    const xp = gainSolo(stats || {});
-    await pool.query('UPDATE users SET xp = xp + ? WHERE id = ?', [xp, userId]);
-    const [[row]] = await pool.query('SELECT xp FROM users WHERE id = ? LIMIT 1', [userId]);
+    // Calcul & update XP (PostgreSQL) + récup direct du total via RETURNING
+    const xp = gainSolo({ wpm, acc, typed, correct, errors, elapsed });
+    const { rows } = await pool.query(
+      `UPDATE users
+         SET xp = xp + $1
+       WHERE id = $2
+       RETURNING xp`,
+      [xp, userId]
+    );
 
-    res.json({ ok: true, xpGained: xp, xpTotal: row?.xp ?? null });
+    const xpTotal = rows?.[0]?.xp ?? null;
+
+    res.json({ ok: true, xpGained: xp, xpTotal });
   } catch (e) {
     console.error(e);
     res.json({ error: 'solo_xp_failed' });

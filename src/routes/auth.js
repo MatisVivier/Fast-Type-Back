@@ -14,7 +14,7 @@ const isProd = process.env.NODE_ENV === 'production';
 const COOKIE_OPTS = {
   httpOnly: true,
   sameSite: 'lax',
-  secure: isProd,          // ✅ secure en prod
+  secure: isProd,
   path: '/',
   maxAge: 7 * 24 * 60 * 60 * 1000,
 };
@@ -28,26 +28,35 @@ function clearAuthCookie(res) {
   res.clearCookie(COOKIE_NAME, { ...COOKIE_OPTS, maxAge: undefined });
 }
 
-/* -------- Helpers SQL -------- */
+/* -------- Helpers SQL (PostgreSQL) -------- */
 async function getUserById(id) {
-  const [rows] = await pool.query(
-    'SELECT id, email, username, rating, xp, password_hash FROM users WHERE id = ? LIMIT 1',
+  const { rows } = await pool.query(
+    `SELECT id, email, username, rating, xp, password_hash
+     FROM users
+     WHERE id = $1
+     LIMIT 1`,
     [id]
   );
   return rows[0] || null;
 }
 
 async function getUserByEmail(email) {
-  const [rows] = await pool.query(
-    'SELECT id, email, username, rating, xp, password_hash FROM users WHERE email = ? LIMIT 1',
+  const { rows } = await pool.query(
+    `SELECT id, email, username, rating, xp, password_hash
+     FROM users
+     WHERE email = $1
+     LIMIT 1`,
     [email]
   );
   return rows[0] || null;
 }
 
 async function getUserByUsername(username) {
-  const [rows] = await pool.query(
-    'SELECT id, email, username, rating, xp, password_hash FROM users WHERE username = ? LIMIT 1',
+  const { rows } = await pool.query(
+    `SELECT id, email, username, rating, xp, password_hash
+     FROM users
+     WHERE username = $1
+     LIMIT 1`,
     [username]
   );
   return rows[0] || null;
@@ -72,6 +81,7 @@ router.post('/auth/register', async (req, res) => {
       return res.status(400).json({ error: 'weak_password' });
     }
 
+    // Pré-checks (conservent un message d'erreur clair)
     const [byEmail, byUsername] = await Promise.all([
       getUserByEmail(email),
       getUserByUsername(username),
@@ -82,19 +92,26 @@ router.post('/auth/register', async (req, res) => {
     const id = randomUUID();
     const hash = await bcrypt.hash(password, 12);
 
-    await pool.query(
-      'INSERT INTO users (id, username, email, password_hash, rating, xp) VALUES (?, ?, ?, ?, 200, 0)',
+    // INSERT + RETURNING (PostgreSQL)
+    const { rows } = await pool.query(
+      `INSERT INTO users (id, username, email, password_hash, rating, xp)
+       VALUES ($1, $2, $3, $4, 200, 0)
+       RETURNING id, username, email, rating, xp`,
       [id, username, email, hash]
     );
+    const user = rows[0];
 
-    const user = await getUserById(id);
-
-    setAuthCookie(res, { sub: id });
-    res.json({
-      ok: true,
-      user: { id: user.id, username: user.username, email: user.email, rating: user.rating, xp: user.xp },
-    });
+    setAuthCookie(res, { sub: user.id });
+    res.json({ ok: true, user });
   } catch (e) {
+    // Violation d'unicité (si contraintes UNIQUE en base)
+    if (e && e.code === '23505') {
+      // Essaye de déterminer quel champ est en conflit si possible
+      const msg = (e.detail || '').toLowerCase();
+      if (msg.includes('email')) return res.status(409).json({ error: 'email_taken' });
+      if (msg.includes('username')) return res.status(409).json({ error: 'username_taken' });
+      return res.status(409).json({ error: 'conflict' });
+    }
     console.error(e);
     res.status(500).json({ error: 'register_failed' });
   }
@@ -147,9 +164,9 @@ router.get('/auth/me', async (req, res) => {
     const user = await getUserById(decoded.sub);
 
     res.json({
-      user: user ? {
-        id: user.id, username: user.username, email: user.email, rating: user.rating, xp: user.xp
-      } : null
+      user: user
+        ? { id: user.id, username: user.username, email: user.email, rating: user.rating, xp: user.xp }
+        : null,
     });
   } catch {
     res.json({ user: null });
