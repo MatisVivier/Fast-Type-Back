@@ -76,33 +76,45 @@ function newRating(r, score, expected, K = 24) { return Math.round(r + K * (scor
 function isForfeit(s) {
   return typeof s?.finishedBy === 'string' && s.finishedBy.startsWith('forfeit');
 }
-function decideWinner(s1, s2) {
-  if (isForfeit(s1) && !isForfeit(s2)) return { w: 2, reason: 'Forfait' };
-  if (!isForfeit(s1) && isForfeit(s2)) return { w: 1, reason: 'Forfait' };
-  if (isForfeit(s1) && isForfeit(s2))   return { w: 0, reason: 'Double forfait' };
+function decideWinner(p1, p2, limitSec) {
+  // pX: { username, wpm, acc (0..1), errors, elapsed (ms) }
+  const w1 = p1.wpm || 0;
+  const w2 = p2.wpm || 0;
+  const a1 = (p1.acc || 0) * 100;  // en %
+  const a2 = (p2.acc || 0) * 100;
 
-  const f1 = s1.finishedBy === 'text';
-  const f2 = s2.finishedBy === 'text';
+  const wpmDiff = Math.abs(w1 - w2);
+  const accDiff = Math.abs(a1 - a2);
 
-  if (f1 && !f2) return { w: 1, reason: 'A terminé le texte en premier' };
-  if (!f1 && f2) return { w: 2, reason: 'A terminé le texte en premier' };
-
-  if (f1 && f2) {
-    if (s1.elapsed !== s2.elapsed)
-      return { w: s1.elapsed < s2.elapsed ? 1 : 2, reason: 'Plus rapide à finir' };
-    if (s1.acc !== s2.acc)
-      return { w: s1.acc > s2.acc ? 1 : 2, reason: 'Plus grande précision' };
-    if (s1.wpm !== s2.wpm)
-      return { w: s1.wpm > s2.wpm ? 1 : 2, reason: 'Meilleur WPM' };
-    return { w: 0, reason: 'Égalité' };
+  // 1) WPM prime si > 10
+  if (wpmDiff > 10) {
+    return { winner: w1 > w2 ? 'p1' : 'p2', reason: 'wpm' };
   }
 
-  if (s1.acc !== s2.acc)
-    return { w: s1.acc > s2.acc ? 1 : 2, reason: 'Plus grande précision' };
-  if (s1.wpm !== s2.wpm)
-    return { w: s1.wpm > s2.wpm ? 1 : 2, reason: 'Meilleur WPM' };
+  // 2) Zone proche (<= 5) : précision si >= 2 pts, sinon WPM
+  if (wpmDiff <= 5) {
+    if (accDiff >= 2) {
+      if (a1 !== a2) return { winner: a1 > a2 ? 'p1' : 'p2', reason: 'accuracy_tiebreak' };
+    }
+    if (w1 !== w2) return { winner: w1 > w2 ? 'p1' : 'p2', reason: 'wpm_close' };
+  }
 
-  return { w: 0, reason: 'Égalité' };
+  // 3) Zone intermédiaire (6..10) : précision seulement si >= 3 pts, sinon WPM
+  if (wpmDiff >= 6 && wpmDiff <= 10) {
+    if (accDiff >= 3 && a1 !== a2) {
+      return { winner: a1 > a2 ? 'p1' : 'p2', reason: 'accuracy_mid' };
+    }
+    if (w1 !== w2) return { winner: w1 > w2 ? 'p1' : 'p2', reason: 'wpm_mid' };
+  }
+
+  // 4) Tie-breakers fins
+  if (p1.errors !== p2.errors) {
+    return { winner: p1.errors < p2.errors ? 'p1' : 'p2', reason: 'fewer_errors' };
+  }
+  if (p1.elapsed !== p2.elapsed) {
+    return { winner: p1.elapsed < p2.elapsed ? 'p1' : 'p2', reason: 'faster_time' };
+  }
+  return { winner: null, reason: 'draw' };
 }
 
 /* --------------------------- matchmaking ----------------------------- */
