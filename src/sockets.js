@@ -315,7 +315,7 @@ export function attachSockets(httpServer, allowedOrigins) {
   }, 1000);
 
   io.on('connection', async (socket) => {
-    // console.log('WS connected from origin:', socket.handshake.headers.origin);
+    console.log('WS connected from origin:', socket.handshake.headers.origin);
     const user = await authFromSocket(socket);
     socket.data.user = user;
 
@@ -384,6 +384,13 @@ export function attachSockets(httpServer, allowedOrigins) {
       inMatch.delete(socket.id);
     });
   });
+
+  io.engine.on('connection', (raw) => {
+  console.log('[ENG] transport=', raw.transport.name);
+  raw.on('upgrade', () => {
+    console.log('[ENG] upgraded to', raw.transport.name);
+  });
+});
 
   return io;
 }
