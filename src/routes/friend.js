@@ -1,12 +1,7 @@
 // server/routes/friends.js
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
-import {
-  searchUsersByUsername, getPendingRequests, sendFriendRequest,
-  acceptRequest, declineRequest, cancelRequest, listFriends,
-  removeFriend, getPublicProfile
-} from '../services/friends.js';
-import { notifyUser } from '../sockets.js'; // on l’ajoute plus bas
+import pool from '../db.js';
 
 const router = Router();
 const COOKIE_NAME = process.env.COOKIE_NAME || 'ta_session';
@@ -18,148 +13,169 @@ function authUserId(req) {
     if (!tok) return null;
     const decoded = jwt.verify(tok, JWT_SECRET);
     return decoded.sub || null;
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
-// --- Search / autocomplete ---
+/**
+ * GET /api/friends/search?q=xxx
+ * Retourne des utilisateurs dont le username commence par q,
+ * en excluant soi-même, les déjà amis, et les pending requests.
+ */
 router.get('/friends/search', async (req, res) => {
   const uid = authUserId(req);
   if (!uid) return res.status(401).json({ error: 'not_authenticated' });
+
   const q = (req.query.q || '').trim();
   if (!q) return res.json({ items: [] });
 
   try {
-    const items = await searchUsersByUsername(q, uid, 10);
-    res.json({ items });
+    const { rows } = await pool.query(
+      `
+      SELECT u.id, u.username, u.avatar_url, u.rating, u.xp
+      FROM users u
+      WHERE u.id <> $2
+        AND u.username ILIKE $1 || '%'
+        AND NOT EXISTS (
+          SELECT 1 FROM friendships f
+          WHERE (f.user_a = u.id AND f.user_b = $2) OR (f.user_b = u.id AND f.user_a = $2)
+        )
+        AND NOT EXISTS (
+          SELECT 1 FROM friend_requests r
+          WHERE r.status = 'pending' AND
+                ((r.from_user_id = $2 AND r.to_user_id = u.id) OR (r.from_user_id = u.id AND r.to_user_id = $2))
+        )
+      ORDER BY u.username ASC
+      LIMIT 10
+      `,
+      [q, uid]
+    );
+    res.json({ items: rows });
   } catch (e) {
-    console.error(e);
+    console.error('friends/search error', e);
     res.status(500).json({ error: 'server_error' });
   }
 });
 
-// Profil public pour la modale
-router.get('/users/:id/profile', async (req, res) => {
-  const uid = authUserId(req); // optionnel (on peut afficher public sans être loggé si tu veux)
-  const target = req.params.id;
-  try {
-    const profile = await getPublicProfile(target);
-    if (!profile) return res.status(404).json({ error: 'not_found' });
-    res.json({ profile });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'server_error' });
-  }
-});
-
-// Envoyer une demande
-router.post('/friends/requests', async (req, res) => {
-  const uid = authUserId(req);
-  if (!uid) return res.status(401).json({ error: 'not_authenticated' });
-  const { to_user_id } = req.body || {};
-  if (!to_user_id || to_user_id === uid) return res.status(400).json({ error: 'invalid_target' });
-
-  try {
-    const result = await sendFriendRequest(uid, to_user_id);
-    if (result.alreadyFriends) return res.status(409).json({ error: 'already_friends' });
-    if (result.alreadyPending) return res.status(409).json({ error: 'already_pending', request_id: result.requestId });
-
-    // Notifier le destinataire (pending ou auto-accept)
-    if (result.autoAccepted) {
-      notifyUser(to_user_id, 'friend_added', { userId: uid });
-      notifyUser(uid, 'friend_added', { userId: to_user_id });
-      return res.json({ ok: true, autoAccepted: true, request_id: result.requestId });
-    } else {
-      notifyUser(to_user_id, 'friend_request', { fromUserId: uid });
-      return res.json({ ok: true, request_id: result.requestId, created_at: result.created_at });
-    }
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'server_error' });
-  }
-});
-
-// Liste des pending (entrantes + sortantes)
-router.get('/friends/requests', async (req, res) => {
-  const uid = authUserId(req);
-  if (!uid) return res.status(401).json({ error: 'not_authenticated' });
-  try {
-    const items = await getPendingRequests(uid);
-    res.json({ items });
-  } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: 'server_error' });
-  }
-});
-
-// Accepter
-router.post('/friends/requests/:id/accept', async (req, res) => {
-  const uid = authUserId(req);
-  if (!uid) return res.status(401).json({ error: 'not_authenticated' });
-  try {
-    const r = await acceptRequest(req.params.id, uid);
-    if (r.notFound) return res.status(404).json({ error: 'not_found' });
-    if (r.forbidden) return res.status(403).json({ error: 'forbidden' });
-    if (r.alreadyHandled) return res.status(409).json({ error: 'already_handled' });
-
-    notifyUser(uid, 'friend_added', { userId: r.friendId });
-    notifyUser(r.friendId, 'friend_added', { userId: uid });
-    res.json({ ok: true });
-  } catch (e) {
-    console.error(e); res.status(500).json({ error: 'server_error' });
-  }
-});
-
-// Refuser
-router.post('/friends/requests/:id/decline', async (req, res) => {
-  const uid = authUserId(req);
-  if (!uid) return res.status(401).json({ error: 'not_authenticated' });
-  try {
-    const r = await declineRequest(req.params.id, uid);
-    if (r.notFoundOrForbidden) return res.status(404).json({ error: 'not_found_or_forbidden' });
-    res.json({ ok: true });
-  } catch (e) {
-    console.error(e); res.status(500).json({ error: 'server_error' });
-  }
-});
-
-// Annuler (si c'est toi qui l'as envoyée)
-router.post('/friends/requests/:id/cancel', async (req, res) => {
-  const uid = authUserId(req);
-  if (!uid) return res.status(401).json({ error: 'not_authenticated' });
-  try {
-    const r = await cancelRequest(req.params.id, uid);
-    if (!r.ok) return res.status(404).json({ error: 'not_found_or_forbidden' });
-    res.json({ ok: true });
-  } catch (e) {
-    console.error(e); res.status(500).json({ error: 'server_error' });
-  }
-});
-
-// Liste des amis
+/**
+ * (Optionnel mais utile) GET /api/friends
+ * Liste des amis pour la sidebar.
+ */
 router.get('/friends', async (req, res) => {
   const uid = authUserId(req);
   if (!uid) return res.status(401).json({ error: 'not_authenticated' });
+
   try {
-    const items = await listFriends(uid);
-    res.json({ items });
+    const { rows } = await pool.query(
+      `
+      SELECT other.id, other.username, other.avatar_url, other.rating, other.xp
+      FROM friendships f
+      JOIN users other
+        ON other.id = CASE WHEN f.user_a = $1 THEN f.user_b ELSE f.user_a END
+      WHERE f.user_a = $1 OR f.user_b = $1
+      ORDER BY other.username ASC
+      `,
+      [uid]
+    );
+    res.json({ items: rows });
   } catch (e) {
-    console.error(e); res.status(500).json({ error: 'server_error' });
+    console.error('friends list error', e);
+    res.status(500).json({ error: 'server_error' });
   }
 });
 
-// Supprimer un ami
-router.delete('/friends/:otherUserId', async (req, res) => {
+/**
+ * (Optionnel minimal) GET /api/friends/requests
+ * pour que ta page ne plante pas.
+ */
+router.get('/friends/requests', async (req, res) => {
   const uid = authUserId(req);
   if (!uid) return res.status(401).json({ error: 'not_authenticated' });
-  const other = req.params.otherUserId;
+
   try {
-    const r = await removeFriend(uid, other);
-    if (!r.ok) return res.status(404).json({ error: 'not_friends' });
-    notifyUser(other, 'friend_removed', { userId: uid });
-    notifyUser(uid, 'friend_removed', { userId: other });
-    res.json({ ok: true });
+    const { rows } = await pool.query(
+      `
+      SELECT r.id, r.created_at, r.status,
+             r.from_user_id, fu.username AS from_username,
+             r.to_user_id,   tu.username AS to_username
+      FROM friend_requests r
+      JOIN users fu ON fu.id = r.from_user_id
+      JOIN users tu ON tu.id = r.to_user_id
+      WHERE (r.to_user_id = $1 OR r.from_user_id = $1)
+        AND r.status = 'pending'
+      ORDER BY r.created_at DESC
+      `,
+      [uid]
+    );
+    res.json({ items: rows });
   } catch (e) {
-    console.error(e); res.status(500).json({ error: 'server_error' });
+    console.error('friends requests error', e);
+    res.status(500).json({ error: 'server_error' });
+  }
+});
+
+/**
+ * (Optionnel minimal) POST /api/friends/requests
+ * Envoie une invitation via to_user_id (correspond à ton front actuel).
+ */
+router.post('/friends/requests', async (req, res) => {
+  const uid = authUserId(req);
+  if (!uid) return res.status(401).json({ error: 'not_authenticated' });
+
+  const { to_user_id } = req.body || {};
+  if (!to_user_id || to_user_id === uid) {
+    return res.status(400).json({ error: 'invalid_target' });
+  }
+
+  try {
+    // déjà amis ?
+    const already = await pool.query(
+      `SELECT 1 FROM friendships WHERE (user_a=$1 AND user_b=$2) OR (user_a=$2 AND user_b=$1) LIMIT 1`,
+      [uid, to_user_id]
+    );
+    if (already.rowCount) return res.status(409).json({ error: 'already_friends' });
+
+    // demande opposée déjà pending ? => auto-accept
+    const pend = await pool.query(
+      `SELECT id FROM friend_requests
+       WHERE status='pending' AND from_user_id=$2 AND to_user_id=$1
+       LIMIT 1`,
+      [uid, to_user_id]
+    );
+    if (pend.rowCount) {
+      const rid = pend.rows[0].id;
+      await pool.query(`UPDATE friend_requests SET status='accepted' WHERE id=$1`, [rid]);
+      await pool.query(
+        `INSERT INTO friendships(user_a, user_b)
+         VALUES ($1, $2)
+         ON CONFLICT DO NOTHING`,
+        [uid, to_user_id]
+      );
+      return res.json({ ok: true, autoAccepted: true, request_id: rid });
+    }
+
+    // existe déjà une pending dans le même sens ?
+    const pendSame = await pool.query(
+      `SELECT id FROM friend_requests
+       WHERE status='pending' AND from_user_id=$1 AND to_user_id=$2
+       LIMIT 1`,
+      [uid, to_user_id]
+    );
+    if (pendSame.rowCount) {
+      return res.status(409).json({ error: 'already_pending', request_id: pendSame.rows[0].id });
+    }
+
+    // sinon créer la demande
+    const ins = await pool.query(
+      `INSERT INTO friend_requests(from_user_id, to_user_id, status)
+       VALUES ($1, $2, 'pending') RETURNING id, created_at`,
+      [uid, to_user_id]
+    );
+    res.json({ ok: true, request_id: ins.rows[0].id, created_at: ins.rows[0].created_at });
+  } catch (e) {
+    console.error('send request error', e);
+    res.status(500).json({ error: 'server_error' });
   }
 });
 
