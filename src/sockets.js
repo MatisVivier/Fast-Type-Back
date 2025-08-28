@@ -197,19 +197,54 @@ function finalizeAndEmit(io, matchId) {
   const p1Xp = gainRanked ? gainRanked(p1Stats, p1Win) : 0;
   const p2Xp = gainRanked ? gainRanked(p2Stats, p2Win) : 0;
 
-  (async () => {
+    (async () => {
     try {
-      // Updates Postgres
-      await pool.query(
-        'UPDATE users SET rating = $1, xp = xp + $2 WHERE id = $3',
-        [p1New, p1Xp, p1.id]
+      await pool.query('BEGIN');
+
+      // p1: calc niveaux & pièces
+      const { rows: p1r0 } = await pool.query(
+        `SELECT xp, coin_balance FROM users WHERE id = $1 FOR UPDATE`,
+        [p1.id]
       );
-      await pool.query(
-        'UPDATE users SET rating = $1, xp = xp + $2 WHERE id = $3',
-        [p2New, p2Xp, p2.id]
+      const p1OldXp  = p1r0?.[0]?.xp ?? 0;
+      const p1OldLvl = levelFromXp(p1OldXp).level;
+      const p1NewXp  = p1OldXp + p1Xp;
+      const p1NewLvl = levelFromXp(p1NewXp).level;
+      const p1Coins  = coinsEarnedBetweenLevels(p1OldLvl, p1NewLvl);
+
+      // p2
+      const { rows: p2r0 } = await pool.query(
+        `SELECT xp, coin_balance FROM users WHERE id = $1 FOR UPDATE`,
+        [p2.id]
+      );
+      const p2OldXp  = p2r0?.[0]?.xp ?? 0;
+      const p2OldLvl = levelFromXp(p2OldXp).level;
+      const p2NewXp  = p2OldXp + p2Xp;
+      const p2NewLvl = levelFromXp(p2NewXp).level;
+      const p2Coins  = coinsEarnedBetweenLevels(p2OldLvl, p2NewLvl);
+
+      // Appliquer updates (rating + xp + coins)
+      const { rows: p1r1 } = await pool.query(
+        `UPDATE users
+            SET rating = $1,
+                xp = $2,
+                coin_balance = coin_balance + $3
+          WHERE id = $4
+          RETURNING xp, coin_balance`,
+        [p1New, p1NewXp, p1Coins, p1.id]
       );
 
-      // Historique du match (Postgres)
+      const { rows: p2r1 } = await pool.query(
+        `UPDATE users
+            SET rating = $1,
+                xp = $2,
+                coin_balance = coin_balance + $3
+          WHERE id = $4
+          RETURNING xp, coin_balance`,
+        [p2New, p2NewXp, p2Coins, p2.id]
+      );
+
+      // Historique du match
       await pool.query(
         `INSERT INTO matches (
            p1_id, p2_id, p1_username, p2_username,
@@ -238,8 +273,57 @@ function finalizeAndEmit(io, matchId) {
           totalElapsed
         ]
       );
+
+      await pool.query('COMMIT');
+
+      // Mettre à jour l'état socket (facultatif, pour cohérence live)
+      if (s1?.data?.user) {
+        s1.data.user.rating = p1New;
+        s1.data.user.xp = p1r1?.[0]?.xp ?? p1NewXp;
+        s1.data.user.coin_balance = p1r1?.[0]?.coin_balance ?? (s1.data.user.coin_balance || 0) + p1Coins;
+      }
+      if (s2?.data?.user) {
+        s2.data.user.rating = p2New;
+        s2.data.user.xp = p2r1?.[0]?.xp ?? p2NewXp;
+        s2.data.user.coin_balance = p2r1?.[0]?.coin_balance ?? (s2.data.user.coin_balance || 0) + p2Coins;
+      }
+
+      // Émettre le résultat en incluant les pièces gagnées
+      io.to(matchId).emit('match:result', {
+        ok: true,
+        roomId: matchId,
+        reason: decision.reason,
+        winnerUserId: decision.w === 1 ? p1.id : (decision.w === 2 ? p2.id : null),
+        winnerUsername: decision.w === 1 ? p1.username : (decision.w === 2 ? p2.username : null),
+        p1: {
+          userId: p1.id,
+          username: p1.username,
+          wpm: p1Stats.wpm,
+          acc: p1Stats.acc,
+          elapsed: p1Stats.elapsed,
+          ratingBefore: p1.rating,
+          ratingAfter: p1New,
+          xpGain: p1Xp,
+          coinsAwarded: p1Coins
+        },
+        p2: {
+          userId: p2.id,
+          username: p2.username,
+          wpm: p2Stats.wpm,
+          acc: p2Stats.acc,
+          elapsed: p2Stats.elapsed,
+          ratingBefore: p2.rating,
+          ratingAfter: p2New,
+          xpGain: p2Xp,
+          coinsAwarded: p2Coins
+        },
+        eloDelta: delta,
+        totalElapsed
+      });
+
     } catch (e) {
-      console.error('❌ Failed to update ratings/xp', e);
+      console.error('❌ Failed to update ratings/xp/coins', e);
+      try { await pool.query('ROLLBACK'); } catch {}
     }
   })();
 
