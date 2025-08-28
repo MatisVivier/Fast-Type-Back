@@ -12,6 +12,7 @@ import auth from './routes/auth.js';
 import soloRoutes from './routes/solo.js';
 import accountRoutes from './routes/account.js';
 import walletRoutes from './routes/wallet.js';
+import testRoutes from './routes/test.js';
 
 // --- NEW: Amis & Invitations (back complet) ---
 import friendsRoutes from './src/routes/friends.js';
@@ -71,6 +72,7 @@ app.use('/api', auth);
 app.use('/api', soloRoutes);
 app.use('/api', accountRoutes);
 app.use('/api', walletRoutes);
+app.use('/api', testRoutes);
 
 // NEW: routes Amis/Invitations
 app.use('/api', friendsRoutes);
