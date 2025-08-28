@@ -14,7 +14,7 @@ import accountRoutes from './routes/account.js';
 import walletRoutes from './routes/wallet.js';
 
 // --- NEW: Amis & Invitations (back complet) ---
-import friendsRoutes from './routes/friends.js';
+import friendsRoutes from './src/routes/friends.js';
 
 // Sockets (doit exposer attachSockets)
 import { attachSockets } from './sockets.js';
@@ -88,6 +88,14 @@ app.get('/api/debug/db', async (_req, res) => {
     console.error('DB debug error:', e.code || e.message);
     res.status(503).json({ ok: false, error: e.code || 'db_error' });
   }
+});
+
+app.get('/api/__which', (_req, res) => {
+  res.json({
+    file: import.meta.url,  // montre quel server.js tourne
+    cwd: process.cwd(),     // répertoire courant
+    hint: 'friends router should be mounted at /api',
+  });
 });
 
 // --- Handler d'erreurs CORS propre (évite 500 bruts) ---
