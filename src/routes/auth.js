@@ -82,7 +82,7 @@ router.post('/auth/register', async (req, res) => {
       return res.status(400).json({ error: 'weak_password' });
     }
 
-    // Pré-checks pour des messages d’erreur clairs
+    // Pré-checks
     const [byEmail, byUsername] = await Promise.all([
       getUserByEmail(email),
       getUserByUsername(username),
@@ -92,19 +92,28 @@ router.post('/auth/register', async (req, res) => {
 
     const hash = await bcrypt.hash(password, 12);
 
-    // Laisse Postgres générer l'id (IDENTITY) et récupère via RETURNING
+    // INSERT user (coin_balance par défaut = 0)
     const { rows } = await pool.query(
-      `INSERT INTO users (username, email, password_hash, rating, xp)
-       VALUES ($1, $2, $3, 200, 0)
-       RETURNING id, username, email, rating, xp`,
+      `INSERT INTO users (username, email, password_hash, rating, xp, coin_balance)
+       VALUES ($1, $2, $3, 200, 0, 0)
+       RETURNING id, username, email, rating, xp, coin_balance`,
       [username, email, hash]
     );
     const user = rows[0];
 
     setAuthCookie(res, { sub: user.id });
-    res.json({ ok: true, user });
+    res.json({
+      ok: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        rating: user.rating,
+        xp: user.xp,
+        coin_balance: user.coin_balance,
+      }
+    });
   } catch (e) {
-    // Violation d'unicité (si contraintes UNIQUE en base)
     if (e && e.code === '23505') {
       const msg = (e.detail || '').toLowerCase();
       if (msg.includes('email')) return res.status(409).json({ error: 'email_taken' });
@@ -119,7 +128,7 @@ router.post('/auth/register', async (req, res) => {
 /* -------- Login -------- */
 /**
  * POST /api/auth/login
- * body: { identifier, password }   // identifier = email OU username
+ * body: { identifier, password }
  */
 router.post('/auth/login', async (req, res) => {
   try {
@@ -142,7 +151,14 @@ router.post('/auth/login', async (req, res) => {
     setAuthCookie(res, { sub: user.id });
     res.json({
       ok: true,
-      user: { id: user.id, username: user.username, email: user.email, rating: user.rating, xp: user.xp },
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        rating: user.rating,
+        xp: user.xp,
+        coin_balance: user.coin_balance,
+      }
     });
   } catch (e) {
     console.error(e);
@@ -164,10 +180,18 @@ router.get('/auth/me', async (req, res) => {
 
     res.json({
       user: user
-        ? { id: user.id, username: user.username, email: user.email, rating: user.rating, xp: user.xp }
+        ? {
+            id: user.id,
+            username: user.username,
+            email: user.email,
+            rating: user.rating,
+            xp: user.xp,
+            coin_balance: user.coin_balance,
+          }
         : null,
     });
-  } catch {
+  } catch (e) {
+    console.error(e);
     res.json({ user: null });
   }
 });
