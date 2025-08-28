@@ -2,7 +2,7 @@ import { Router } from 'express';
 import pool from '../db.js';
 import jwt from 'jsonwebtoken';
 import { gainSolo } from '../xp.js';
-import { levelFromXp, coinsEarnedBetweenLevels } from '../services/progression.js';
+import { levelFromXp, coinsEarnedBetweenLevels } from '../../services/progression.js';
 
 const router = Router();
 const COOKIE_NAME = process.env.COOKIE_NAME || 'ta_session';
