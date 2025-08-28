@@ -19,6 +19,15 @@ const queue  = [];          // { socketId, userId, username, rating }
 const inMatch = new Map();  // socketId -> matchId
 // matchId -> { p1Sid, p2Sid, p1:{...}, p2:{...}, startAt, text, limitSec, p1Stats?, p2Stats?, p1LastAct, p2LastAct, p1Prog?, p2Prog? }
 const active = new Map();
+const userSockets = new Map();
+
+export function notifyUser(userId, event, payload) {
+  const set = userSockets.get(userId);
+  if (!set) return;
+  for (const s of set) {
+    s.emit(event, payload);
+  }
+}
 
 /* ------------------------ utils auth & cookies ------------------------ */
 function parseCookieHeader(cookieHeader = '') {
@@ -374,31 +383,38 @@ function statsFromProgress(prog, startAt) {
  * @param {import('http').Server} httpServer
  * @param {string[]} allowedOrigins - liste blanche des origins autorisés
  */
-export function attachSockets(httpServer, allowedOrigins) {
+export function attachSockets(httpServer, corsOrigins = []) {
   const io = new Server(httpServer, {
-    path: '/socket.io',
-    transports: ['polling', 'websocket'],
-    // CORS explicite (pas de callback ici → engine.io met les bons headers)
-    cors: {
-      origin: allowedOrigins,                    // ex: ['https://matisvivier.github.io','http://localhost:5173']
-      credentials: true,
-      methods: ['GET', 'POST', 'OPTIONS'],
-      allowedHeaders: ['Content-Type', 'Authorization'],
-    },
-    // OPTIONS pour /socket.io → forcer les headers CORS attendus par le browser
-    handlePreflightRequest: (req, res) => {
-      const headers = {
-        'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-        'Access-Control-Allow-Origin': req.headers.origin || '*',
-        'Access-Control-Allow-Credentials': 'true',
-        'Access-Control-Allow-Methods': 'GET,POST,OPTIONS',
-        'Vary': 'Origin',
-      };
-      res.writeHead(200, headers);
-      res.end();
-    },
-    pingInterval: 25000,
-    pingTimeout: 20000,
+    cors: { origin: corsOrigins, credentials: true },
+    transports: ['websocket', 'polling'],
+  });
+
+  io.on('connection', (socket) => {
+    try {
+      // Auth via cookie JWT
+      const cookie = socket.handshake.headers.cookie || '';
+      const token = cookie.split(';').map(s => s.trim()).find(s => s.startsWith(COOKIE_NAME + '='))?.split('=')[1];
+      const payload = token ? jwt.verify(token, JWT_SECRET) : null;
+      const userId = payload?.sub;
+      if (!userId) {
+        socket.disconnect(true);
+        return;
+      }
+
+      // register
+      if (!userSockets.has(userId)) userSockets.set(userId, new Set());
+      userSockets.get(userId).add(socket);
+
+      socket.on('disconnect', () => {
+        const set = userSockets.get(userId);
+        if (set) {
+          set.delete(socket);
+          if (!set.size) userSockets.delete(userId);
+        }
+      });
+    } catch {
+      socket.disconnect(true);
+    }
   });
 
   /* --------- Surveillance globale de l'inactivité (tick 1s) --------- */

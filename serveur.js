@@ -5,34 +5,40 @@ import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import http from 'http';
 
+// --- Routes existantes ---
 import health from './routes/health.js';
 import texts from './routes/texts.js';
 import auth from './routes/auth.js';
 import soloRoutes from './routes/solo.js';
 import accountRoutes from './routes/account.js';
-import { attachSockets } from './sockets.js';
 import walletRoutes from './routes/wallet.js';
+
+// --- NEW: Amis & Invitations (back complet) ---
+import friendsRoutes from './routes/friends.js';
+
+// Sockets (doit exposer attachSockets)
+import { attachSockets } from './sockets.js';
 
 // DB pool + keepalive (PostgreSQL)
 import pool, { startDbKeepAlive } from './db.js';
 
 const app = express();
 
-// Derrière un proxy (Render) pour que "secure" des cookies soit correct
+// Derrière un proxy (Render/NGINX/Heroku) => cookies "secure" corrects
 app.set('trust proxy', 1);
 
 // --- CORS (whitelist) ---
 const allowedOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(',').map(s => s.trim()).filter(Boolean)
   : [
-      'https://matisvivier.github.io', // Front GitHub Pages (origine sans chemin)
-      'http://localhost:5173',         // Dev Vite
-      // 'https://fast-type-back.onrender.com' // Inutile: c'est le back lui-même
+      'https://matisvivier.github.io', // Front GitHub Pages
+      'http://localhost:5173',         // Dev Vite local
+      // 'https://fast-type-back.onrender.com' // inutile: c'est le back lui-même
     ];
 
 const corsOptions = {
   origin(origin, cb) {
-    // Autorise les requêtes sans header Origin (health checks, curl)
+    // Autorise les requêtes sans Origin (curl, health, tests)
     if (!origin) return cb(null, true);
     if (allowedOrigins.includes(origin)) return cb(null, true);
     return cb(new Error(`Not allowed by CORS: ${origin}`));
@@ -40,17 +46,17 @@ const corsOptions = {
   credentials: true, // indispensable pour envoyer/recevoir les cookies
   methods: ['GET','POST','PUT','PATCH','DELETE','OPTIONS'],
   allowedHeaders: ['Content-Type','Authorization','X-Requested-With'],
-  // Pas de exposedHeaders requis ici, on n’en lit pas côté client
 };
 
 app.use(cors(corsOptions));
 // Pré-vols explicites (OPTIONS)
 app.options('*', cors(corsOptions));
 
+// Parsers
 app.use(express.json({ limit: '1mb' }));
 app.use(cookieParser());
 
-// (debug) log des appels REST + origin
+// (debug) log minimal des appels REST + origin
 app.use((req, _res, next) => {
   if (req.path.startsWith('/api')) {
     console.log('[REST]', req.method, req.path, 'Origin=', req.headers.origin || '∅');
@@ -64,10 +70,12 @@ app.use('/api', texts);
 app.use('/api', auth);
 app.use('/api', soloRoutes);
 app.use('/api', accountRoutes);
-
 app.use('/api', walletRoutes);
 
-// Health simple
+// NEW: routes Amis/Invitations
+app.use('/api', friendsRoutes);
+
+// Healths
 app.get('/api/healthz', (_req, res) => res.json({ ok: true, via: 'inline' }));
 
 // (debug) endpoint DB (PostgreSQL)
@@ -89,21 +97,25 @@ app.use((err, _req, res, next) => {
   return next(err);
 });
 
+// (optionnel) 404 API
+app.use('/api', (_req, res) => {
+  res.status(404).json({ ok: false, error: 'not_found' });
+});
+
 // --- HTTP + Sockets ---
 const server = http.createServer(app);
-
 // Passe la même whitelist aux sockets (Socket.IO gère ses propres CORS)
 attachSockets(server, allowedOrigins);
 
-// --- Lancement + vérif DB ---
+// --- Lancement + keepalive DB ---
 const PORT = process.env.PORT || 3001;
 server.listen(PORT, async () => {
   console.log(`✅ Server running on :${PORT}`);
 
-  // Keepalive DB pour éviter le sleep des connexions
+  // Keepalive DB pour éviter le sleep des connexions (pings réguliers)
   startDbKeepAlive();
 
-  // Check DB au boot (PostgreSQL)
+  // Check DB au boot
   try {
     const { rows } = await pool.query('SELECT 1 AS ok');
     console.log('✅ DB OK', rows[0]);
