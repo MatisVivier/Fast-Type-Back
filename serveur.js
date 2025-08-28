@@ -74,6 +74,7 @@ app.use('/api', walletRoutes);
 
 // NEW: routes Amis/Invitations
 app.use('/api', friendsRoutes);
+console.log('[server] friendsRoutes mounted at /api');
 
 // Healths
 app.get('/api/healthz', (_req, res) => res.json({ ok: true, via: 'inline' }));

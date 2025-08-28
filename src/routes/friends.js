@@ -1,4 +1,5 @@
 // server/routes/friends.js
+console.log('[friends] routes file loaded');
 import { Router } from 'express';
 import jwt from 'jsonwebtoken';
 import pool from '../db.js';
