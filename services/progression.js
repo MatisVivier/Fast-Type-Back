@@ -24,7 +24,10 @@ export function coinsEarnedBetweenLevels(oldLevel, newLevel) {
   if (newLevel <= oldLevel) return 0;
   let coins = 0;
   for (let L = oldLevel + 1; L <= newLevel; L++) {
-    if (L % 2 === 0) coins += 1;
+    if (L % 2 === 0) {
+      // Tirage aléatoire entre 1 et 5 inclus
+      coins += Math.floor(Math.random() * 5) + 1;
+    }
   }
   return coins;
 }
